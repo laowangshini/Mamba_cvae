@@ -45,6 +45,10 @@ IMG_SIZE = cfg['train']['img_size']
 _model = cfg.get('model', {})
 COND_DIM = int(_model.get('cond_dim', 0))
 COND_EMBED_DIM = int(_model.get('cond_embed_dim', 256))
+COND_MODE = str(_model.get('cond_mode', 'attr')).strip().lower()
+CLIP_TEXT_DIM = int(_model.get('clip_text_dim', 768))
+CLIP_CACHE_PT = _model.get('clip_cache_pt')
+MAPPER_BIDIRECTIONAL = bool(_model.get('mapper_bidirectional', True))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -64,6 +68,14 @@ _manifest = {
     "latent_dim": LATENT_DIM,
     "cond_dim": COND_DIM,
     "cond_embed_dim": COND_EMBED_DIM,
+    "cond_mode": COND_MODE,
+    "clip_text_dim": CLIP_TEXT_DIM,
+    "clip_cache_pt": (
+        os.path.join(PROJECT_ROOT, CLIP_CACHE_PT)
+        if CLIP_CACHE_PT and not os.path.isabs(CLIP_CACHE_PT)
+        else CLIP_CACHE_PT
+    ),
+    "mapper_bidirectional": MAPPER_BIDIRECTIONAL,
     "description": cfg["experiment"].get("description", ""),
     "train": dict(cfg["train"]),
     "source_config": os.path.abspath(
@@ -117,9 +129,24 @@ def load_celeba_attrs(attr_csv_path, cond_dim=40):
 
 
 class CelebAImageDataset(Dataset):
-    """返回图像；若提供 attr_map 则同时返回 (img, cond) 的 40 维属性。"""
+    """
+    返回图像；
+    Phase2：attr_map + cond_dim>0 时返回 (img, cond) 属性向量；
+    Phase3：cond_mode=clip_seq 且 clip_map 时返回 (img, text_seq)，text_seq 形状 [L, C]。
+    """
 
-    def __init__(self, img_dir, transform=None, limit=None, attr_map=None, cond_dim=40):
+    def __init__(
+        self,
+        img_dir,
+        transform=None,
+        limit=None,
+        attr_map=None,
+        cond_dim=40,
+        cond_mode="attr",
+        clip_map=None,
+        clip_text_dim=768,
+        clip_default_seq_len=77,
+    ):
         self.img_dir = img_dir
         self.img_names = sorted(os.listdir(img_dir))
         if limit:
@@ -127,7 +154,13 @@ class CelebAImageDataset(Dataset):
         self.transform = transform
         self.attr_map = attr_map
         self.cond_dim = cond_dim
-        self.use_cond = attr_map is not None and cond_dim > 0
+        self.cond_mode = cond_mode
+        self.clip_map = clip_map
+        self.clip_text_dim = clip_text_dim
+        self.clip_default_seq_len = clip_default_seq_len
+        self.use_cond = (cond_mode == "attr" and attr_map is not None and cond_dim > 0) or (
+            cond_mode == "clip_seq" and clip_map is not None
+        )
 
     def __len__(self):
         return len(self.img_names)
@@ -141,6 +174,16 @@ class CelebAImageDataset(Dataset):
                 image = self.transform(image)
         except Exception:
             image = torch.zeros(3, IMG_SIZE, IMG_SIZE)
+
+        if self.cond_mode == "clip_seq" and self.clip_map is not None:
+            seq = self.clip_map.get(name)
+            if seq is None:
+                seq = torch.zeros(
+                    self.clip_default_seq_len, self.clip_text_dim, dtype=torch.float32
+                )
+            else:
+                seq = seq.to(dtype=torch.float32)
+            return image, seq
 
         if self.use_cond:
             cond = self.attr_map.get(name)
@@ -160,7 +203,10 @@ def main():
     logger.info("="*50)
     logger.info(f"Starting Experiment: {EXPERIMENT_NAME}")
     logger.info(f"Block Type: {BLOCK_TYPE}")
-    logger.info(f"cond_dim: {COND_DIM}, cond_embed_dim: {COND_EMBED_DIM}")
+    logger.info(
+        f"cond_mode: {COND_MODE}, cond_dim: {COND_DIM}, cond_embed_dim: {COND_EMBED_DIM}, "
+        f"clip_text_dim: {CLIP_TEXT_DIM}"
+    )
     logger.info(f"Experiment Directory: {EXP_DIR}")
     logger.info(f"Manifest: {os.path.join(EXP_DIR, 'manifest.json')} (本目录归属说明)")
     logger.info(f"Registry: {os.path.join(PROJECT_ROOT, 'experiments', 'experiment_registry.csv')} (全局索引)")
@@ -173,11 +219,45 @@ def main():
     ])
 
     attr_map = None
-    if COND_DIM > 0:
+    clip_map = None
+    model_cond_dim = COND_DIM
+
+    if COND_MODE == "clip_seq":
+        if not CLIP_CACHE_PT:
+            raise FileNotFoundError(
+                "Phase3 cond_mode=clip_seq 需要配置 model.clip_cache_pt（CLIP 文本序列缓存 .pt）。"
+            )
+        cache_path = (
+            CLIP_CACHE_PT
+            if os.path.isabs(CLIP_CACHE_PT)
+            else os.path.join(PROJECT_ROOT, CLIP_CACHE_PT)
+        )
+        if not os.path.isfile(cache_path):
+            raise FileNotFoundError(f"未找到 CLIP 缓存: {cache_path}")
+        try:
+            blob = torch.load(cache_path, map_location="cpu", weights_only=False)
+        except TypeError:
+            blob = torch.load(cache_path, map_location="cpu")
+        if isinstance(blob, dict) and "per_image" in blob:
+            clip_map = blob["per_image"]
+            fdim = blob.get("clip_text_dim")
+            if fdim is not None and int(fdim) != CLIP_TEXT_DIM:
+                logger.warning(
+                    "缓存 clip_text_dim=%s 与配置 %s 不一致，请与预计算脚本/YAML 对齐。",
+                    fdim,
+                    CLIP_TEXT_DIM,
+                )
+        else:
+            clip_map = blob
+        logger.info("Loaded CLIP text-seq cache for %d filenames.", len(clip_map))
+        model_cond_dim = 0
+    elif COND_DIM > 0:
         if not os.path.isfile(ATTR_CSV):
             raise FileNotFoundError(f"需要属性文件: {ATTR_CSV}")
         attr_map = load_celeba_attrs(ATTR_CSV, cond_dim=COND_DIM)
         logger.info(f"Loaded {len(attr_map)} attribute rows from list_attr_celeba.csv")
+    elif COND_MODE != "attr":
+        raise ValueError(f"未知 cond_mode: {COND_MODE}（支持 attr | clip_seq）")
 
     dataset = CelebAImageDataset(
         DATA_ROOT,
@@ -185,6 +265,9 @@ def main():
         limit=50000,
         attr_map=attr_map,
         cond_dim=COND_DIM,
+        cond_mode=COND_MODE,
+        clip_map=clip_map,
+        clip_text_dim=CLIP_TEXT_DIM,
     )
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     logger.info(f"Dataset loaded with {len(dataset)} images.")
@@ -192,8 +275,11 @@ def main():
     model = MambaCVAE(
         latent_dim=LATENT_DIM,
         block_type=BLOCK_TYPE,
-        cond_dim=COND_DIM,
+        cond_dim=model_cond_dim,
         cond_embed_dim=COND_EMBED_DIM,
+        cond_mode=COND_MODE,
+        clip_text_dim=CLIP_TEXT_DIM,
+        mapper_bidirectional=MAPPER_BIDIRECTIONAL,
     ).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LR)
 
@@ -205,7 +291,7 @@ def main():
         last_cond = None
 
         for batch in pbar:
-            if COND_DIM > 0:
+            if dataset.use_cond:
                 images, cond = batch
                 images = images.to(DEVICE)
                 cond = cond.to(DEVICE)

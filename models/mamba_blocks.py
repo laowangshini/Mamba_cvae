@@ -234,3 +234,48 @@ VSSBlock = SS2DBlock
 
 # 1.txt 中 1D 序列版 ConditionalMambaBlock 的语义，由带 cond_embed_dim 的
 # SS2DBlock / VSSBlock_1D 在 (B,C,H,W) 上完成；CNNBlock 不做条件注入（消融基线）。
+
+
+class MambaSemanticMapper(nn.Module):
+    """
+    Phase 3：基于 Mamba 的序列语义映射器（Sequential Semantic Mapper）。
+    将 CLIP Text Encoder 的 Token 序列 [B, L, C] 压缩为供 AdaLN 使用的全局条件向量 [B, hidden_dim]。
+    双向扫描参考 Vim；序列池化参考 ZigMa 类工作。
+    """
+
+    def __init__(
+        self,
+        clip_text_dim=768,
+        hidden_dim=256,
+        bidirectional=True,
+        d_state=16,
+        d_conv=4,
+        expand=2,
+    ):
+        super().__init__()
+        self.bidirectional = bidirectional
+        self.proj_in = nn.Linear(clip_text_dim, hidden_dim)
+        self.mamba_fwd = Mamba(
+            d_model=hidden_dim, d_state=d_state, d_conv=d_conv, expand=expand
+        )
+        if self.bidirectional:
+            self.mamba_rev = Mamba(
+                d_model=hidden_dim, d_state=d_state, d_conv=d_conv, expand=expand
+            )
+        self.proj_out = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, text_seq):
+        # text_seq: [B, L, clip_text_dim]
+        x = self.proj_in(text_seq)
+        if self.bidirectional:
+            x_fwd = self.mamba_fwd(x)
+            x_rev = self.mamba_rev(x.flip(dims=[1])).flip(dims=[1])
+            x = x_fwd + x_rev
+        else:
+            x = self.mamba_fwd(x)
+        pooled = x.mean(dim=1)
+        return self.proj_out(pooled)

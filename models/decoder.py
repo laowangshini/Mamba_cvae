@@ -1,10 +1,11 @@
 """
-解码器（Phase2 / 1.txt）：根据 block_type 选择 CNN / 1D Mamba / SS2D；
-当 cond_dim>0 时，在解码器内持有 cond_embedding，并将连续条件 c_emb 传入各 Mamba 块（AdaLN）。
+解码器（Phase2 / Phase3 / 1.txt）：根据 block_type 选择 CNN / 1D Mamba / SS2D；
+Phase2：cond_dim>0 时用 MLP 将属性向量映射为 AdaLN 条件；
+Phase3：cond_mode=clip_seq 时用 MambaSemanticMapper 处理 CLIP 文本 Token 序列 [B,L,C]。
 """
 import torch
 import torch.nn as nn
-from .mamba_blocks import CNNBlock, VSSBlock_1D, SS2DBlock
+from .mamba_blocks import CNNBlock, VSSBlock_1D, SS2DBlock, MambaSemanticMapper
 
 
 def _make_block(Block, dim, cond_embed_dim):
@@ -21,6 +22,9 @@ class MambaDecoder(nn.Module):
         block_type="ss2d",
         cond_dim=0,
         cond_embed_dim=256,
+        cond_mode="attr",
+        clip_text_dim=768,
+        mapper_bidirectional=True,
     ):
         super().__init__()
 
@@ -37,9 +41,17 @@ class MambaDecoder(nn.Module):
         self.embed_dim = 256
         self.cond_dim = cond_dim
         self.cond_embed_dim = cond_embed_dim
+        self.cond_mode = cond_mode
+        self.clip_text_dim = clip_text_dim
 
-        # 1.txt：将离散 CelebA 属性映射到连续空间，供各「条件化」Mamba 块使用
-        if cond_dim and cond_dim > 0:
+        if cond_mode == "clip_seq":
+            self.cond_embedding = MambaSemanticMapper(
+                clip_text_dim=clip_text_dim,
+                hidden_dim=cond_embed_dim,
+                bidirectional=mapper_bidirectional,
+            )
+            ced = cond_embed_dim
+        elif cond_dim and cond_dim > 0:
             self.cond_embedding = nn.Sequential(
                 nn.Linear(cond_dim, cond_embed_dim),
                 nn.SiLU(),
@@ -72,6 +84,10 @@ class MambaDecoder(nn.Module):
         cond_emb = None
         if self.cond_embedding is not None:
             if cond is None:
+                if self.cond_mode == "clip_seq":
+                    raise ValueError(
+                        "decoder 为 clip_seq 时必须提供 cond，形状 [B, L, clip_text_dim]。"
+                    )
                 raise ValueError("decoder 已启用条件分支时必须提供 cond (B, cond_dim)。")
             cond_emb = self.cond_embedding(cond)
 

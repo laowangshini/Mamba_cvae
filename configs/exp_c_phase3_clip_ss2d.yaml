@@ -1,0 +1,25 @@
+# Phase 3（1.txt）：CLIP 文本 Token 序列 -> MambaSemanticMapper -> AdaLN + SS2D 解码器
+# 训练前请先运行：
+#   python scripts/precompute_celeba_clip_text_seq.py --out data/celeba/celeba_clip_text_vitl14.pt --limit 60000
+# 并保证 YAML 中 clip_text_dim / clip_cache_pt 与预计算一致（ViT-L/14 为 768）。
+
+experiment:
+  name: "exp_c_phase3_clip_ss2d"
+  description: "Phase3: MambaSemanticMapper on CLIP text tokens + SS2D AdaLN"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 768
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitl14.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
