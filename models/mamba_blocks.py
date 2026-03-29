@@ -2,7 +2,7 @@
 模块化 Backbone：CNNBlock / VSSBlock_1D（光栅 Mamba）/ SS2DBlock（VMamba 风格 SS2D）。
 
 对齐 1.txt 消融：block_type 可选 cnn | mamba_1d | ss2d。
-Phase2：可选 AdaLN（FiLM / DiT 风格）在 LayerNorm 后对视觉 Token 做条件调制。
+Phase2：AdaLN 在 LayerNorm 后对特征做 FiLM 式调制（x*(1+gamma)+beta），避免仅输入端 Concat 的条件信号稀释。
 """
 import torch
 import torch.nn as nn
@@ -11,8 +11,12 @@ from mamba_ssm import Mamba
 
 class AdaLN(nn.Module):
     """
-    条件向量 -> (gamma, beta)，对 LayerNorm 后的序列特征做 x * (1 + gamma) + beta。
-    最后一层 Linear 零初始化，使初始接近恒等（gamma,beta -> 0）。
+    Adaptive Layer Normalization（借鉴 DiT, Peebles & Xie, ICCV 2023；调制形式见 FiLM, Perez et al., AAAI 2018）。
+
+    将条件嵌入映射为 gamma、beta，对 LayerNorm 后的 Token 特征做 x * (1 + gamma) + beta，
+    使条件在解码器每一层持续起作用，而非仅在输入拼接一次。
+
+    最后一层 Linear 采用 Zero-Init：训练初期 gamma,beta -> 0，块近似恒等映射，利于深层稳定优化。
     """
 
     def __init__(self, cond_dim, feat_dim):
@@ -172,6 +176,9 @@ class VSSBlock_1D(nn.Module):
 class SS2DBlock(nn.Module):
     """
     VMamba 风格：DWConv + SS2D + 门控；接口 (B, C, H, W)。
+
+    当传入 cond_embed_dim 时，在首层 LayerNorm 之后注入 AdaLN，对应 1.txt 中
+    「ConditionalMambaBlock」在深度层反复注入条件的思想（此处为 2D 特征图实现）。
     """
 
     def __init__(self, dim, d_state=16, d_conv=4, expand=2, cond_embed_dim=None):
@@ -223,3 +230,7 @@ class SS2DBlock(nn.Module):
 
 # 兼容旧代码中的命名
 VSSBlock = SS2DBlock
+
+
+# 1.txt 中 1D 序列版 ConditionalMambaBlock 的语义，由带 cond_embed_dim 的
+# SS2DBlock / VSSBlock_1D 在 (B,C,H,W) 上完成；CNNBlock 不做条件注入（消融基线）。

@@ -6,8 +6,8 @@ from .decoder import MambaDecoder
 
 class MambaCVAE(nn.Module):
     """
-    CVAE：编码器仅看图像；解码器可选 AdaLN，将 CelebA 40 维属性嵌入为 cond_emb 后传入各 Mamba 块。
-    cond_dim=0 时退化为无条件模型（与旧 checkpoint 行为一致，decoder 不接收有效条件）。
+    CVAE（Phase2 / 1.txt）：Encoder 仅编码图像；Decoder 内可选 cond_embedding + 各层 AdaLN。
+    cond_dim=0 时为无条件解码（与旧 checkpoint 结构一致，仅缺少 decoder.cond_embedding）。
     """
 
     def __init__(
@@ -23,25 +23,12 @@ class MambaCVAE(nn.Module):
         self.cond_embed_dim = cond_embed_dim
 
         self.encoder = MambaEncoder(latent_dim=latent_dim, block_type=block_type)
-
-        if cond_dim and cond_dim > 0:
-            self.cond_embedding = nn.Sequential(
-                nn.Linear(cond_dim, cond_embed_dim),
-                nn.SiLU(),
-                nn.Linear(cond_embed_dim, cond_embed_dim),
-            )
-            self.decoder = MambaDecoder(
-                latent_dim=latent_dim,
-                block_type=block_type,
-                cond_embed_dim=cond_embed_dim,
-            )
-        else:
-            self.cond_embedding = None
-            self.decoder = MambaDecoder(
-                latent_dim=latent_dim,
-                block_type=block_type,
-                cond_embed_dim=None,
-            )
+        self.decoder = MambaDecoder(
+            latent_dim=latent_dim,
+            block_type=block_type,
+            cond_dim=cond_dim,
+            cond_embed_dim=cond_embed_dim,
+        )
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -50,14 +37,14 @@ class MambaCVAE(nn.Module):
             return mu + eps * std
         return mu
 
+    def encode(self, x):
+        return self.encoder(x)
+
+    def decode(self, z, cond=None):
+        return self.decoder(z, cond)
+
     def forward(self, x, cond=None):
-        mu, logvar = self.encoder(x)
+        mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        if self.cond_embedding is not None:
-            if cond is None:
-                raise ValueError("cond_dim>0 时必须在 forward 中传入 cond (B, cond_dim)。")
-            c_emb = self.cond_embedding(cond)
-            recon_x = self.decoder(z, c_emb)
-        else:
-            recon_x = self.decoder(z, None)
+        recon_x = self.decode(z, cond)
         return recon_x, mu, logvar
