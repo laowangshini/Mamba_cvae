@@ -1,0 +1,15 @@
+experiment:
+  name: "exp_a_mamba_1d"
+  description: "Ablation Study A: Using 1D Mamba Block (Raster Scan)"
+
+model:
+  block_type: "mamba_1d"
+  latent_dim: 128
+  cond_dim: 0
+  cond_embed_dim: 256
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64

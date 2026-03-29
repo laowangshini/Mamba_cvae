@@ -1,0 +1,16 @@
+experiment:
+  name: "exp_b_mamba_ss2d"
+  description: "Proposed Method: Using 2D Selective Scan (VMamba/SS2D)"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  # Phase2：CelebA 40 维属性 + 解码器 AdaLN（1.txt）；设为 0 则与旧版无条件 CVAE 一致
+  cond_dim: 40
+  cond_embed_dim: 256
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64

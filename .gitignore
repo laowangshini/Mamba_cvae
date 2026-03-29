@@ -1,0 +1,53 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# --- 虚拟环境 ---
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# --- IDE / 系统 ---
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- 训练产物（体积大、可重现）---
+experiments/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+
+# --- 项目根目录下的运行日志（若存在）---
+log_*.txt
+
+# --- 大数据与预处理生成文件 ---
+# CelebA 对齐人脸图像（需自行下载解压到此路径，勿提交）
+data/celeba/img_align_celeba/
+
+# CLIP 预处理等生成的大体积 pickle（可由 scripts/preprocess_data.py 重新生成）
+data/**/*.pkl
+*.pkl
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- 覆盖率 / 测试缓存 ---
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/

@@ -1,0 +1,15 @@
+experiment:
+  name: "exp_baseline_cnn"
+  description: "Baseline: Using CNN residual blocks (no Mamba)"
+
+model:
+  block_type: "cnn"
+  latent_dim: 128
+  cond_dim: 0
+  cond_embed_dim: 256
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
