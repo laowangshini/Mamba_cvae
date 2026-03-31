@@ -13,9 +13,9 @@ model:
   cond_mode: "clip_seq"
   cond_dim: 0
   cond_embed_dim: 256
-  clip_text_dim: 768
+  clip_text_dim: 512
   clip_seq_len: 77
-  clip_cache_pt: "data/celeba/celeba_clip_text_vitl14.pt"
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
   mapper_bidirectional: true
 
 train:

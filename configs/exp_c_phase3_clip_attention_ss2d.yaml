@@ -1,0 +1,28 @@
+# Phase 3.1 Baseline：CLIP 序列 -> MHSA -> mean pool -> MLP -> AdaLN + SS2D
+#
+# 训练前请先运行（一次性）：
+#   python scripts/precompute_celeba_clip_text_seq.py --out data/celeba/celeba_clip_text_vitl14.pt --limit 60000
+
+experiment:
+  name: "exp_c_phase3_clip_attention_ss2d"
+  description: "Phase3.1 baseline: CLIP seq + self-attention mapper -> AdaLN + SS2D"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_attention"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: false
+  # 可调：注意力头数（越大越慢/越耗显存）
+  attn_heads: 4
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+

@@ -73,7 +73,7 @@ class CelebAHeldOutDataset(Dataset):
     优先使用排序文件名中索引在 [DEFAULT_TRAIN_LIMIT, DEFAULT_TRAIN_LIMIT+NUM_TEST) 的图像；
     若数量不足（小数据集），退化为取末尾若干张并在控制台提示可能与训练重叠。
 
-    Phase3：cond_mode=clip_seq 时返回 CLIP 文本序列 [L, C]（与 train 同源 clip_map）。
+    Phase3：cond_mode=clip_* 时返回 CLIP 文本序列 [L, C]（与 train 同源 clip_map）。
     """
 
     def __init__(
@@ -110,7 +110,7 @@ class CelebAHeldOutDataset(Dataset):
         self.clip_text_dim = clip_text_dim
         self.clip_default_seq_len = clip_default_seq_len
         self.use_cond = (cond_mode == "attr" and attr_map is not None and cond_dim > 0) or (
-            cond_mode == "clip_seq" and clip_map is not None
+            cond_mode.startswith("clip_") and clip_map is not None
         )
 
     def __len__(self):
@@ -122,7 +122,7 @@ class CelebAHeldOutDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         if self.transform:
             image = self.transform(image)
-        if self.cond_mode == "clip_seq" and self.clip_map is not None:
+        if self.cond_mode.startswith("clip_") and self.clip_map is not None:
             seq = self.clip_map.get(name)
             if seq is None:
                 seq = torch.zeros(
@@ -188,7 +188,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     img_size = cfg["train"]["img_size"]
     batch_size = cfg["train"]["batch_size"]
 
-    model_cond_dim = 0 if cond_mode == "clip_seq" else cond_dim
+    model_cond_dim = 0 if cond_mode.startswith("clip_") else cond_dim
     model = MambaCVAE(
         latent_dim=latent_dim,
         block_type=block_type,
@@ -203,7 +203,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     model.eval()
 
     try:
-        if cond_mode == "clip_seq":
+        if cond_mode.startswith("clip_"):
 
             class _FlopsWrapperClip(torch.nn.Module):
                 def __init__(self, inner, seq_len, ctd):
@@ -263,9 +263,9 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     )
     attr_map = None
     clip_map = None
-    if cond_mode == "clip_seq":
+    if cond_mode.startswith("clip_"):
         if not clip_cache_pt:
-            print(f"Skipping {exp_name_dir}: cond_mode=clip_seq 但未配置 clip_cache_pt")
+            print(f"Skipping {exp_name_dir}: cond_mode=clip_* 但未配置 clip_cache_pt")
             return None
         cpath = (
             clip_cache_pt
@@ -334,7 +334,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     if DEVICE == "cuda" and len(dataset) > 0:
         # 固定小批量测速（与 1.txt 中 Throughput 描述一致）
         dummy = torch.randn(8, 3, img_size, img_size, device=DEVICE)
-        if cond_mode == "clip_seq":
+        if cond_mode.startswith("clip_"):
             dummy_cond = torch.randn(
                 8, clip_default_seq_len, clip_text_dim, device=DEVICE
             )

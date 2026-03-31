@@ -5,7 +5,14 @@ Phase3：cond_mode=clip_seq 时用 MambaSemanticMapper 处理 CLIP 文本 Token 
 """
 import torch
 import torch.nn as nn
-from .mamba_blocks import CNNBlock, VSSBlock_1D, SS2DBlock, MambaSemanticMapper
+from .mamba_blocks import (
+    AttentionSemanticMapper,
+    CNNBlock,
+    LinearSemanticMapper,
+    MambaSemanticMapper,
+    SS2DBlock,
+    VSSBlock_1D,
+)
 
 
 def _make_block(Block, dim, cond_embed_dim):
@@ -25,6 +32,7 @@ class MambaDecoder(nn.Module):
         cond_mode="attr",
         clip_text_dim=768,
         mapper_bidirectional=True,
+        attn_heads=4,
     ):
         super().__init__()
 
@@ -49,6 +57,18 @@ class MambaDecoder(nn.Module):
                 clip_text_dim=clip_text_dim,
                 hidden_dim=cond_embed_dim,
                 bidirectional=mapper_bidirectional,
+            )
+            ced = cond_embed_dim
+        elif cond_mode == "clip_pooled":
+            self.cond_embedding = LinearSemanticMapper(
+                clip_text_dim=clip_text_dim, hidden_dim=cond_embed_dim
+            )
+            ced = cond_embed_dim
+        elif cond_mode == "clip_attention":
+            self.cond_embedding = AttentionSemanticMapper(
+                clip_text_dim=clip_text_dim,
+                hidden_dim=cond_embed_dim,
+                num_heads=attn_heads,
             )
             ced = cond_embed_dim
         elif cond_dim and cond_dim > 0:
@@ -84,9 +104,9 @@ class MambaDecoder(nn.Module):
         cond_emb = None
         if self.cond_embedding is not None:
             if cond is None:
-                if self.cond_mode == "clip_seq":
+                if self.cond_mode in ("clip_seq", "clip_pooled", "clip_attention"):
                     raise ValueError(
-                        "decoder 为 clip_seq 时必须提供 cond，形状 [B, L, clip_text_dim]。"
+                        "decoder 为 clip_* 时必须提供 cond，形状 [B, L, clip_text_dim]。"
                     )
                 raise ValueError("decoder 已启用条件分支时必须提供 cond (B, cond_dim)。")
             cond_emb = self.cond_embedding(cond)

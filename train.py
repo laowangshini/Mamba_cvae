@@ -132,7 +132,7 @@ class CelebAImageDataset(Dataset):
     """
     返回图像；
     Phase2：attr_map + cond_dim>0 时返回 (img, cond) 属性向量；
-    Phase3：cond_mode=clip_seq 且 clip_map 时返回 (img, text_seq)，text_seq 形状 [L, C]。
+    Phase3：cond_mode=clip_* 且 clip_map 时返回 (img, text_seq)，text_seq 形状 [L, C]。
     """
 
     def __init__(
@@ -159,7 +159,7 @@ class CelebAImageDataset(Dataset):
         self.clip_text_dim = clip_text_dim
         self.clip_default_seq_len = clip_default_seq_len
         self.use_cond = (cond_mode == "attr" and attr_map is not None and cond_dim > 0) or (
-            cond_mode == "clip_seq" and clip_map is not None
+            cond_mode.startswith("clip_") and clip_map is not None
         )
 
     def __len__(self):
@@ -175,7 +175,7 @@ class CelebAImageDataset(Dataset):
         except Exception:
             image = torch.zeros(3, IMG_SIZE, IMG_SIZE)
 
-        if self.cond_mode == "clip_seq" and self.clip_map is not None:
+        if self.cond_mode.startswith("clip_") and self.clip_map is not None:
             seq = self.clip_map.get(name)
             if seq is None:
                 seq = torch.zeros(
@@ -222,10 +222,10 @@ def main():
     clip_map = None
     model_cond_dim = COND_DIM
 
-    if COND_MODE == "clip_seq":
+    if COND_MODE.startswith("clip_"):
         if not CLIP_CACHE_PT:
             raise FileNotFoundError(
-                "Phase3 cond_mode=clip_seq 需要配置 model.clip_cache_pt（CLIP 文本序列缓存 .pt）。"
+                "Phase3 cond_mode=clip_* 需要配置 model.clip_cache_pt（CLIP 文本序列缓存 .pt）。"
             )
         cache_path = (
             CLIP_CACHE_PT
@@ -257,7 +257,9 @@ def main():
         attr_map = load_celeba_attrs(ATTR_CSV, cond_dim=COND_DIM)
         logger.info(f"Loaded {len(attr_map)} attribute rows from list_attr_celeba.csv")
     elif COND_MODE != "attr":
-        raise ValueError(f"未知 cond_mode: {COND_MODE}（支持 attr | clip_seq）")
+        raise ValueError(
+            f"未知 cond_mode: {COND_MODE}（支持 attr | clip_pooled | clip_attention | clip_seq）"
+        )
 
     dataset = CelebAImageDataset(
         DATA_ROOT,

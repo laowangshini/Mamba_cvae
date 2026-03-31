@@ -279,3 +279,45 @@ class MambaSemanticMapper(nn.Module):
             x = self.mamba_fwd(x)
         pooled = x.mean(dim=1)
         return self.proj_out(pooled)
+
+
+class LinearSemanticMapper(nn.Module):
+    """
+    Phase 3.1 Baseline：线性/MLP 池化映射（模拟 “拿到序列后直接池化 + MLP” 的粗粒度做法）。
+    """
+
+    def __init__(self, clip_text_dim=768, hidden_dim=256):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Linear(clip_text_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, text_seq):
+        pooled = text_seq.mean(dim=1)
+        return self.proj(pooled)
+
+
+class AttentionSemanticMapper(nn.Module):
+    """
+    Phase 3.1 Baseline：自注意力映射（Transformer 标准做法），之后仍池化为全局向量以对接 AdaLN。
+    """
+
+    def __init__(self, clip_text_dim=768, hidden_dim=256, num_heads=4):
+        super().__init__()
+        self.proj_in = nn.Linear(clip_text_dim, hidden_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
+        )
+        self.proj_out = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, text_seq):
+        x = self.proj_in(text_seq)
+        x, _ = self.attn(x, x, x, need_weights=False)
+        pooled = x.mean(dim=1)
+        return self.proj_out(pooled)

@@ -20,6 +20,7 @@ class MambaCVAE(nn.Module):
         cond_mode="attr",
         clip_text_dim=768,
         mapper_bidirectional=True,
+        attn_heads=4,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -37,6 +38,7 @@ class MambaCVAE(nn.Module):
             cond_mode=cond_mode,
             clip_text_dim=clip_text_dim,
             mapper_bidirectional=mapper_bidirectional,
+            attn_heads=attn_heads,
         )
 
     def reparameterize(self, mu, logvar):

@@ -5,6 +5,8 @@
 
 文本由 list_attr_celeba 中值为 1 的属性名拼接而成（与 Phase2 语义一致）。
 默认使用 openai/clip-vit-large-patch14（文本隐层 768，与 1.txt 一致）。
+若你已提前下载好模型到本地目录（例如 /root/autodl-tmp/CLIP），可直接 --model 指向该目录，
+脚本会自动启用 local_files_only=True，避免联网。
 
 用法示例：
   python scripts/precompute_celeba_clip_text_seq.py \\
@@ -100,8 +102,9 @@ def main() -> None:
 
     names = _list_images(args.img_dir)[: args.limit]
 
-    tokenizer = CLIPTokenizer.from_pretrained(args.model)
-    text_model = CLIPTextModel.from_pretrained(args.model)
+    local_only = os.path.isdir(args.model)
+    tokenizer = CLIPTokenizer.from_pretrained(args.model, local_files_only=local_only)
+    text_model = CLIPTextModel.from_pretrained(args.model, local_files_only=local_only)
     text_model.eval()
     text_model.to(device)
 
