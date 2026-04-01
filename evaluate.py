@@ -20,6 +20,8 @@ import pandas as pd
 import torch
 import yaml
 from PIL import Image
+import numpy as np
+import torch.nn.functional as F
 from ptflops import get_model_complexity_info
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -43,6 +45,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CANONICAL_PREFIXES = ("exp_baseline_cnn", "exp_a_mamba_1d", "exp_b_mamba_ss2d")
 # ========================================
 
+DEFAULT_CLIP_LOCAL_PATH = "/root/autodl-tmp/CLIP"
+
 
 def _list_images(img_dir):
     names = sorted(
@@ -65,6 +69,45 @@ def load_celeba_attrs(attr_csv_path, cond_dim=40):
             vals = [float(row[j]) for j in range(1, 1 + cond_dim)]
             attr_map[name] = torch.tensor(vals, dtype=torch.float32)
     return attr_map
+
+
+def load_attr_names(attr_csv_path, cond_dim=40):
+    with open(attr_csv_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+    return [h.strip() for h in header[1 : 1 + cond_dim]]
+
+
+def attrs_to_prompts(attr_tensor, attr_names):
+    # attr_tensor: [B, cond_dim] with values roughly in {-1,1} or {0,1}
+    out = []
+    for row in attr_tensor:
+        active = []
+        for i, v in enumerate(row.tolist()):
+            if v > 0:
+                active.append(attr_names[i].replace("_", " ").lower())
+        if not active:
+            out.append("a face portrait")
+        else:
+            out.append("a face with " + ", ".join(active))
+    return out
+
+
+def compute_clip_score_batch(clip_model, clip_processor, images_01, prompts, device):
+    # images_01: [B,3,H,W] in [0,1]
+    imgs_np = (images_01.permute(0, 2, 3, 1).detach().cpu().numpy() * 255.0).astype(
+        np.uint8
+    )
+    pil_images = [Image.fromarray(arr) for arr in imgs_np]
+    inputs = clip_processor(
+        text=prompts, images=pil_images, return_tensors="pt", padding=True
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    outputs = clip_model(**inputs)
+    img_emb = F.normalize(outputs.image_embeds, p=2, dim=-1)
+    txt_emb = F.normalize(outputs.text_embeds, p=2, dim=-1)
+    cosine = (img_emb * txt_emb).sum(dim=-1)
+    return (cosine * 100.0)
 
 
 class CelebAHeldOutDataset(Dataset):
@@ -184,6 +227,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     clip_cache_pt = _m.get("clip_cache_pt")
     mapper_bidirectional = bool(_m.get("mapper_bidirectional", True))
     clip_default_seq_len = int(_m.get("clip_seq_len", 77))
+    attn_heads = int(_m.get("attn_heads", 4))
     # 与 train.py 一致：从本次运行的 run_config.yaml 读取，避免高分辨率训练后评估仍 Resize 成 64 导致崩溃或 FLOPs 统计错误
     img_size = cfg["train"]["img_size"]
     batch_size = cfg["train"]["batch_size"]
@@ -197,6 +241,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
         cond_mode=cond_mode,
         clip_text_dim=clip_text_dim,
         mapper_bidirectional=mapper_bidirectional,
+        attn_heads=attn_heads,
     ).to(DEVICE)
     state = torch.load(weight_path, map_location=DEVICE)
     model.load_state_dict(state)
@@ -263,6 +308,10 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     )
     attr_map = None
     clip_map = None
+    prompt_map = None
+    attr_names = None
+    clip_model = None
+    clip_processor = None
     if cond_mode.startswith("clip_"):
         if not clip_cache_pt:
             print(f"Skipping {exp_name_dir}: cond_mode=clip_* 但未配置 clip_cache_pt")
@@ -281,6 +330,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
             blob = torch.load(cpath, map_location="cpu")
         if isinstance(blob, dict) and "per_image" in blob:
             clip_map = blob["per_image"]
+            prompt_map = blob.get("prompt_per_image")
         else:
             clip_map = blob
     elif cond_dim > 0:
@@ -288,6 +338,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
             print(f"Skipping {exp_name_dir}: cond_dim>0 但未找到 {ATTR_CSV}")
             return None
         attr_map = load_celeba_attrs(ATTR_CSV, cond_dim=cond_dim)
+        attr_names = load_attr_names(ATTR_CSV, cond_dim=cond_dim)
 
     dataset = CelebAHeldOutDataset(
         DATA_ROOT,
@@ -302,6 +353,26 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     print(f"[{exp_name_dir}] Test split: {dataset.split_note} (n={len(dataset)})")
 
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+    total_clip = 0.0
+    total_n = 0
+    # 准备 CLIP 评估器（仅当可获取 prompt 时）
+    if cond_mode.startswith("clip_") or (cond_dim > 0):
+        try:
+            from transformers import CLIPModel, CLIPProcessor
+
+            clip_path = DEFAULT_CLIP_LOCAL_PATH
+            clip_model = CLIPModel.from_pretrained(
+                clip_path, local_files_only=True
+            ).to(DEVICE)
+            clip_model.eval()
+            clip_processor = CLIPProcessor.from_pretrained(
+                clip_path, local_files_only=True
+            )
+        except Exception as e:
+            warnings.warn(f"CLIP Score disabled (failed to load local CLIP at {DEFAULT_CLIP_LOCAL_PATH}: {e})")
+            clip_model = None
+            clip_processor = None
 
     with torch.no_grad():
         for bi, batch in enumerate(
@@ -326,9 +397,29 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
             # LPIPS(net_type=vgg, normalize=True) 要求 [0,1] 与 NCHW
             lpips_metric.update(recon_01, img_01)
 
+            if clip_model is not None and clip_processor is not None:
+                prompts = None
+                if cond_mode.startswith("clip_"):
+                    if prompt_map is not None:
+                        # 依赖 dataset.img_names 顺序：dataloader 不 shuffle
+                        start = bi * batch_size
+                        end = min(start + images.shape[0], len(dataset.img_names))
+                        names = dataset.img_names[start:end]
+                        prompts = [prompt_map.get(n, "a face portrait") for n in names]
+                elif cond_dim > 0 and attr_names is not None and isinstance(cond, torch.Tensor):
+                    prompts = attrs_to_prompts(cond, attr_names)
+
+                if prompts is not None:
+                    scores = compute_clip_score_batch(
+                        clip_model, clip_processor, recon_01, prompts, DEVICE
+                    )
+                    total_clip += scores.sum().item()
+                    total_n += scores.numel()
+
     psnr_val = psnr_metric.compute().item()
     ssim_val = ssim_metric.compute().item()
     lpips_val = lpips_metric.compute().item()
+    clip_score = (total_clip / total_n) if total_n > 0 else float("nan")
 
     throughput_ips = None
     if DEVICE == "cuda" and len(dataset) > 0:
@@ -379,6 +470,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
         "PSNR (↑)": psnr_val,
         "SSIM (↑)": ssim_val,
         "LPIPS (↓)": lpips_val,
+        "CLIP Score (↑)": clip_score,
         "Throughput (img/s) @bs8": throughput_ips if throughput_ips is not None else float("nan"),
     }
 

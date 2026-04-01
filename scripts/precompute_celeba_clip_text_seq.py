@@ -112,6 +112,7 @@ def main() -> None:
     seq_len = text_model.config.max_position_embeddings
 
     per_image: dict[str, torch.Tensor] = {}
+    prompt_per_image: dict[str, str] = {}
     missing_attr = 0
 
     with torch.no_grad():
@@ -121,6 +122,7 @@ def main() -> None:
                 missing_attr += 1
                 continue
             text = attrs_to_prompt(attr_names, vals)
+            prompt_per_image[name] = text
             inputs = tokenizer(
                 [text],
                 padding="max_length",
@@ -140,6 +142,7 @@ def main() -> None:
 
     payload = {
         "per_image": per_image,
+        "prompt_per_image": prompt_per_image,
         "clip_text_dim": hidden,
         "seq_len": seq_len,
         "model_name": args.model,
