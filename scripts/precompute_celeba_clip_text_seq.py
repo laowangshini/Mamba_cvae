@@ -104,7 +104,9 @@ def main() -> None:
 
     local_only = os.path.isdir(args.model)
     tokenizer = CLIPTokenizer.from_pretrained(args.model, local_files_only=local_only)
-    text_model = CLIPTextModel.from_pretrained(args.model, local_files_only=local_only)
+    text_model = CLIPTextModel.from_pretrained(
+        args.model, local_files_only=local_only, use_safetensors=local_only
+    )
     text_model.eval()
     text_model.to(device)
 

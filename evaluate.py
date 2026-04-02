@@ -363,7 +363,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
 
             clip_path = DEFAULT_CLIP_LOCAL_PATH
             clip_model = CLIPModel.from_pretrained(
-                clip_path, local_files_only=True
+                clip_path, local_files_only=True, use_safetensors=True
             ).to(DEVICE)
             clip_model.eval()
             clip_processor = CLIPProcessor.from_pretrained(
