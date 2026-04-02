@@ -1,0 +1,24 @@
+# Phase 3.2（1.txt）：CLIP 文本序列（不池化）+ Cross-Attention 注入 + SS2D
+
+experiment:
+  name: "exp_c_phase3_clip_crossattn_ss2d"
+  description: "Phase3.2: NoPool text mapper + cross-attention injection (Hybrid) + SS2D"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_crossattn"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+  attn_heads: 4
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+

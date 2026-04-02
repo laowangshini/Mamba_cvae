@@ -8,11 +8,36 @@ import torch.nn as nn
 from .mamba_blocks import (
     AttentionSemanticMapper,
     CNNBlock,
+    HybridCrossAttnBlock,
     LinearSemanticMapper,
     MambaSemanticMapper,
+    MambaSemanticMapper_NoPool,
     SS2DBlock,
     VSSBlock_1D,
 )
+
+
+class _CrossAttnInject2D(nn.Module):
+    """
+    将 2D 视觉特征 (B,C,H,W) 展平为序列并投影到 D，与文本序列做 Cross-Attn 后再投影回 C。
+    """
+
+    def __init__(self, in_channels, attn_dim):
+        super().__init__()
+        self.in_channels = in_channels
+        self.attn_dim = attn_dim
+        self.proj_in = nn.Linear(in_channels, attn_dim)
+        self.proj_out = nn.Linear(attn_dim, in_channels)
+
+    def forward(self, x, t_seq, cross_block: HybridCrossAttnBlock):
+        b, c, h, w = x.shape
+        assert c == self.in_channels
+        v = x.permute(0, 2, 3, 1).reshape(b, h * w, c)
+        v = self.proj_in(v)
+        v = cross_block(v, t_seq)
+        v = self.proj_out(v)
+        out = v.view(b, h, w, c).permute(0, 3, 1, 2).contiguous()
+        return out
 
 
 def _make_block(Block, dim, cond_embed_dim):
@@ -59,11 +84,15 @@ class MambaDecoder(nn.Module):
                 bidirectional=mapper_bidirectional,
             )
             ced = cond_embed_dim
+            self.cross_attn_blocks = None
+            self._cross_attn_injectors = None
         elif cond_mode == "clip_pooled":
             self.cond_embedding = LinearSemanticMapper(
                 clip_text_dim=clip_text_dim, hidden_dim=cond_embed_dim
             )
             ced = cond_embed_dim
+            self.cross_attn_blocks = None
+            self._cross_attn_injectors = None
         elif cond_mode == "clip_attention":
             self.cond_embedding = AttentionSemanticMapper(
                 clip_text_dim=clip_text_dim,
@@ -71,6 +100,30 @@ class MambaDecoder(nn.Module):
                 num_heads=attn_heads,
             )
             ced = cond_embed_dim
+            self.cross_attn_blocks = None
+            self._cross_attn_injectors = None
+        elif cond_mode == "clip_crossattn":
+            # Phase 3.2：文本序列不池化 + Cross-Attention 注入
+            self.cond_embedding = MambaSemanticMapper_NoPool(
+                clip_text_dim=clip_text_dim,
+                hidden_dim=cond_embed_dim,
+                bidirectional=mapper_bidirectional,
+            )
+            ced = cond_embed_dim
+            self.cross_attn_blocks = nn.ModuleList(
+                [
+                    HybridCrossAttnBlock(cond_embed_dim, num_heads=attn_heads)
+                    for _ in range(3)
+                ]
+            )
+            # 每个 stage 的视觉通道不同，需要投影到 cond_embed_dim 后做 attention，再投影回去
+            self._cross_attn_injectors = nn.ModuleList(
+                [
+                    _CrossAttnInject2D(256, cond_embed_dim),
+                    _CrossAttnInject2D(128, cond_embed_dim),
+                    _CrossAttnInject2D(64, cond_embed_dim),
+                ]
+            )
         elif cond_dim and cond_dim > 0:
             self.cond_embedding = nn.Sequential(
                 nn.Linear(cond_dim, cond_embed_dim),
@@ -78,9 +131,13 @@ class MambaDecoder(nn.Module):
                 nn.Linear(cond_embed_dim, cond_embed_dim),
             )
             ced = cond_embed_dim
+            self.cross_attn_blocks = None
+            self._cross_attn_injectors = None
         else:
             self.cond_embedding = None
             ced = None
+            self.cross_attn_blocks = None
+            self._cross_attn_injectors = None
 
         self.fc_in = nn.Linear(latent_dim, self.embed_dim * self.map_size * self.map_size)
 
@@ -102,24 +159,35 @@ class MambaDecoder(nn.Module):
 
     def forward(self, z, cond=None):
         cond_emb = None
+        cond_seq = None
         if self.cond_embedding is not None:
             if cond is None:
-                if self.cond_mode in ("clip_seq", "clip_pooled", "clip_attention"):
+                if self.cond_mode in ("clip_seq", "clip_pooled", "clip_attention", "clip_crossattn"):
                     raise ValueError(
                         "decoder 为 clip_* 时必须提供 cond，形状 [B, L, clip_text_dim]。"
                     )
                 raise ValueError("decoder 已启用条件分支时必须提供 cond (B, cond_dim)。")
-            cond_emb = self.cond_embedding(cond)
+            if self.cond_mode == "clip_crossattn":
+                cond_seq = self.cond_embedding(cond)  # [B, Lt, cond_embed_dim]
+                cond_emb = cond_seq.mean(dim=1)  # dummy global，供 AdaLN 形状兼容
+            else:
+                cond_emb = self.cond_embedding(cond)
 
         x = self.fc_in(z)
         x = x.view(-1, self.embed_dim, self.map_size, self.map_size)
         x = self.layer1(x, cond_emb)
+        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+            x = self._cross_attn_injectors[0](x, cond_seq, self.cross_attn_blocks[0])
         x = self.up1(x)
 
         x = self.layer2(x, cond_emb)
+        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+            x = self._cross_attn_injectors[1](x, cond_seq, self.cross_attn_blocks[1])
         x = self.up2(x)
 
         x = self.layer3(x, cond_emb)
+        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+            x = self._cross_attn_injectors[2](x, cond_seq, self.cross_attn_blocks[2])
         x = self.up3(x)
 
         x = self.final_conv(x)

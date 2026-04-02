@@ -321,3 +321,47 @@ class AttentionSemanticMapper(nn.Module):
         x, _ = self.attn(x, x, x, need_weights=False)
         pooled = x.mean(dim=1)
         return self.proj_out(pooled)
+
+
+class MambaSemanticMapper_NoPool(nn.Module):
+    """
+    Phase 3.2：不做池化，保留完整文本序列特征供 Cross-Attention 注入。
+    输出形状：[B, L, hidden_dim]
+    """
+
+    def __init__(self, clip_text_dim=512, hidden_dim=256, bidirectional=True):
+        super().__init__()
+        self.proj_in = nn.Linear(clip_text_dim, hidden_dim)
+        self.bidirectional = bidirectional
+
+        self.mamba_fwd = Mamba(d_model=hidden_dim, d_state=16, d_conv=4, expand=2)
+        if self.bidirectional:
+            self.mamba_rev = Mamba(d_model=hidden_dim, d_state=16, d_conv=4, expand=2)
+
+    def forward(self, text_seq):
+        x = self.proj_in(text_seq)
+        x_fwd = self.mamba_fwd(x)
+        if self.bidirectional:
+            x_rev = self.mamba_rev(x.flip(dims=[1])).flip(dims=[1])
+            return x_fwd + x_rev
+        return x_fwd
+
+
+class HybridCrossAttnBlock(nn.Module):
+    """
+    文本序列 [B, Lt, D] 注入到视觉序列 [B, Lv, D] 的 Cross-Attention 块（视觉为 Query）。
+    """
+
+    def __init__(self, hidden_dim, num_heads=4):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(hidden_dim)
+        self.norm_kv = nn.LayerNorm(hidden_dim)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
+        )
+
+    def forward(self, v_seq, t_seq):
+        q = self.norm_q(v_seq)
+        kv = self.norm_kv(t_seq)
+        attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
+        return v_seq + attn_out
