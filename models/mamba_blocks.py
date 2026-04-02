@@ -408,10 +408,12 @@ class GatedHybridCrossAttnBlock(nn.Module):
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
         )
-        self.gate = nn.Parameter(torch.zeros(1))
+        # Phase 3.4：通道级零初始化门控（每个通道独立控制注入强度）
+        self.gate = nn.Parameter(torch.zeros(hidden_dim))
 
     def forward(self, v_seq, t_seq):
         q = self.norm_q(v_seq)
         kv = self.norm_kv(t_seq)
         attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
+        # gate: [D]，通过广播作用到 [B, Lv, D]
         return v_seq + self.gate * attn_out

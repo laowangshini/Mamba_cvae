@@ -228,6 +228,7 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
     mapper_bidirectional = bool(_m.get("mapper_bidirectional", True))
     clip_default_seq_len = int(_m.get("clip_seq_len", 77))
     attn_heads = int(_m.get("attn_heads", 4))
+    bottleneck_inject_stages = int(_m.get("bottleneck_inject_stages", 1))
     # 与 train.py 一致：从本次运行的 run_config.yaml 读取，避免高分辨率训练后评估仍 Resize 成 64 导致崩溃或 FLOPs 统计错误
     img_size = cfg["train"]["img_size"]
     batch_size = cfg["train"]["batch_size"]
@@ -242,9 +243,15 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
         clip_text_dim=clip_text_dim,
         mapper_bidirectional=mapper_bidirectional,
         attn_heads=attn_heads,
+        bottleneck_inject_stages=bottleneck_inject_stages,
     ).to(DEVICE)
     state = torch.load(weight_path, map_location=DEVICE)
-    model.load_state_dict(state)
+    try:
+        model.load_state_dict(state)
+    except RuntimeError as e:
+        # 兼容旧 checkpoint：例如 gate 从标量升级为通道向量时形状不匹配
+        warnings.warn(f"Non-strict load_state_dict due to mismatch: {e}")
+        model.load_state_dict(state, strict=False)
     model.eval()
 
     try:

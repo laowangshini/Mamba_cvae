@@ -49,6 +49,8 @@ COND_MODE = str(_model.get('cond_mode', 'attr')).strip().lower()
 CLIP_TEXT_DIM = int(_model.get('clip_text_dim', 768))
 CLIP_CACHE_PT = _model.get('clip_cache_pt')
 MAPPER_BIDIRECTIONAL = bool(_model.get('mapper_bidirectional', True))
+ATTN_HEADS = int(_model.get('attn_heads', 4))
+BOTTLENECK_INJECT_STAGES = int(_model.get('bottleneck_inject_stages', 1))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -76,6 +78,8 @@ _manifest = {
         else CLIP_CACHE_PT
     ),
     "mapper_bidirectional": MAPPER_BIDIRECTIONAL,
+    "attn_heads": ATTN_HEADS,
+    "bottleneck_inject_stages": BOTTLENECK_INJECT_STAGES,
     "description": cfg["experiment"].get("description", ""),
     "train": dict(cfg["train"]),
     "source_config": os.path.abspath(
@@ -282,6 +286,8 @@ def main():
         cond_mode=COND_MODE,
         clip_text_dim=CLIP_TEXT_DIM,
         mapper_bidirectional=MAPPER_BIDIRECTIONAL,
+        attn_heads=ATTN_HEADS,
+        bottleneck_inject_stages=BOTTLENECK_INJECT_STAGES,
     ).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LR)
 

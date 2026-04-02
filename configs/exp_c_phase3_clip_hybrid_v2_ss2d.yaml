@@ -1,0 +1,26 @@
+# Phase 3.4（1.txt）：Bottleneck-only Cross-Attn + Channel-wise Zero-Init Gating
+
+experiment:
+  name: "exp_c_phase3_clip_hybrid_v2_ss2d"
+  description: "Phase3.4: bottleneck-only gated cross-attn + global AdaLN (channel-wise gate)"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_hybrid"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+  attn_heads: 4
+  # 只在最低分辨率的前 N 个 stage 注入（我们的解码器有 3 个 stage：256@4x4, 128@8x8, 64@16x16）
+  bottleneck_inject_stages: 1
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+

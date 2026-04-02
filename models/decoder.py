@@ -60,6 +60,7 @@ class MambaDecoder(nn.Module):
         clip_text_dim=768,
         mapper_bidirectional=True,
         attn_heads=4,
+        bottleneck_inject_stages=1,
     ):
         super().__init__()
 
@@ -78,6 +79,7 @@ class MambaDecoder(nn.Module):
         self.cond_embed_dim = cond_embed_dim
         self.cond_mode = cond_mode
         self.clip_text_dim = clip_text_dim
+        self.bottleneck_inject_stages = int(bottleneck_inject_stages)
 
         if cond_mode == "clip_seq":
             self.cond_embedding = MambaSemanticMapper(
@@ -134,6 +136,7 @@ class MambaDecoder(nn.Module):
                 bidirectional=mapper_bidirectional,
             )
             ced = cond_embed_dim
+            # Phase 3.4：只在瓶颈层（最低分辨率 stage）做 Cross-Attn，并使用通道级 gate
             self.cross_attn_blocks = nn.ModuleList(
                 [
                     GatedHybridCrossAttnBlock(cond_embed_dim, num_heads=attn_heads)
@@ -207,17 +210,38 @@ class MambaDecoder(nn.Module):
         x = self.fc_in(z)
         x = x.view(-1, self.embed_dim, self.map_size, self.map_size)
         x = self.layer1(x, cond_emb)
-        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
+        if (
+            self.cond_mode == "clip_crossattn"
+            and cond_seq is not None
+        ) or (
+            self.cond_mode == "clip_hybrid"
+            and cond_seq is not None
+            and self.bottleneck_inject_stages > 0
+        ):
             x = self._cross_attn_injectors[0](x, cond_seq, self.cross_attn_blocks[0])
         x = self.up1(x)
 
         x = self.layer2(x, cond_emb)
-        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
+        if (
+            self.cond_mode == "clip_crossattn"
+            and cond_seq is not None
+        ) or (
+            self.cond_mode == "clip_hybrid"
+            and cond_seq is not None
+            and self.bottleneck_inject_stages > 1
+        ):
             x = self._cross_attn_injectors[1](x, cond_seq, self.cross_attn_blocks[1])
         x = self.up2(x)
 
         x = self.layer3(x, cond_emb)
-        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
+        if (
+            self.cond_mode == "clip_crossattn"
+            and cond_seq is not None
+        ) or (
+            self.cond_mode == "clip_hybrid"
+            and cond_seq is not None
+            and self.bottleneck_inject_stages > 2
+        ):
             x = self._cross_attn_injectors[2](x, cond_seq, self.cross_attn_blocks[2])
         x = self.up3(x)
 
