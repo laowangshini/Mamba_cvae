@@ -365,3 +365,53 @@ class HybridCrossAttnBlock(nn.Module):
         kv = self.norm_kv(t_seq)
         attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
         return v_seq + attn_out
+
+
+class MambaSemanticMapper_Dual(nn.Module):
+    """
+    Phase 3.3：同时输出序列特征与池化全局向量。
+      - out_seq:   [B, L, hidden_dim] 用于 Cross-Attention
+      - out_pooled:[B, hidden_dim]    用于 AdaLN（全局结构稳定）
+    """
+
+    def __init__(self, clip_text_dim=512, hidden_dim=256, bidirectional=True):
+        super().__init__()
+        self.proj_in = nn.Linear(clip_text_dim, hidden_dim)
+        self.bidirectional = bidirectional
+
+        self.mamba_fwd = Mamba(d_model=hidden_dim, d_state=16, d_conv=4, expand=2)
+        if self.bidirectional:
+            self.mamba_rev = Mamba(d_model=hidden_dim, d_state=16, d_conv=4, expand=2)
+
+    def forward(self, text_seq):
+        x = self.proj_in(text_seq)
+        x_fwd = self.mamba_fwd(x)
+        if self.bidirectional:
+            x_rev = self.mamba_rev(x.flip(dims=[1])).flip(dims=[1])
+            out_seq = x_fwd + x_rev
+        else:
+            out_seq = x_fwd
+        out_pooled = out_seq.mean(dim=1)
+        return out_seq, out_pooled
+
+
+class GatedHybridCrossAttnBlock(nn.Module):
+    """
+    Phase 3.3：带零初始化 gate 的 Cross-Attention。
+    初始 gate=0，使模型训练初期等效于不注入 Cross-Attn，避免破坏视觉流形（保护 LPIPS）。
+    """
+
+    def __init__(self, hidden_dim, num_heads=4):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(hidden_dim)
+        self.norm_kv = nn.LayerNorm(hidden_dim)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
+        )
+        self.gate = nn.Parameter(torch.zeros(1))
+
+    def forward(self, v_seq, t_seq):
+        q = self.norm_q(v_seq)
+        kv = self.norm_kv(t_seq)
+        attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
+        return v_seq + self.gate * attn_out

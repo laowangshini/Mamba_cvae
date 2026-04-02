@@ -8,9 +8,11 @@ import torch.nn as nn
 from .mamba_blocks import (
     AttentionSemanticMapper,
     CNNBlock,
+    GatedHybridCrossAttnBlock,
     HybridCrossAttnBlock,
     LinearSemanticMapper,
     MambaSemanticMapper,
+    MambaSemanticMapper_Dual,
     MambaSemanticMapper_NoPool,
     SS2DBlock,
     VSSBlock_1D,
@@ -29,7 +31,7 @@ class _CrossAttnInject2D(nn.Module):
         self.proj_in = nn.Linear(in_channels, attn_dim)
         self.proj_out = nn.Linear(attn_dim, in_channels)
 
-    def forward(self, x, t_seq, cross_block: HybridCrossAttnBlock):
+    def forward(self, x, t_seq, cross_block):
         b, c, h, w = x.shape
         assert c == self.in_channels
         v = x.permute(0, 2, 3, 1).reshape(b, h * w, c)
@@ -124,6 +126,27 @@ class MambaDecoder(nn.Module):
                     _CrossAttnInject2D(64, cond_embed_dim),
                 ]
             )
+        elif cond_mode == "clip_hybrid":
+            # Phase 3.3：Dual-Injection（全局 AdaLN + gated Cross-Attn）
+            self.cond_embedding = MambaSemanticMapper_Dual(
+                clip_text_dim=clip_text_dim,
+                hidden_dim=cond_embed_dim,
+                bidirectional=mapper_bidirectional,
+            )
+            ced = cond_embed_dim
+            self.cross_attn_blocks = nn.ModuleList(
+                [
+                    GatedHybridCrossAttnBlock(cond_embed_dim, num_heads=attn_heads)
+                    for _ in range(3)
+                ]
+            )
+            self._cross_attn_injectors = nn.ModuleList(
+                [
+                    _CrossAttnInject2D(256, cond_embed_dim),
+                    _CrossAttnInject2D(128, cond_embed_dim),
+                    _CrossAttnInject2D(64, cond_embed_dim),
+                ]
+            )
         elif cond_dim and cond_dim > 0:
             self.cond_embedding = nn.Sequential(
                 nn.Linear(cond_dim, cond_embed_dim),
@@ -162,7 +185,13 @@ class MambaDecoder(nn.Module):
         cond_seq = None
         if self.cond_embedding is not None:
             if cond is None:
-                if self.cond_mode in ("clip_seq", "clip_pooled", "clip_attention", "clip_crossattn"):
+                if self.cond_mode in (
+                    "clip_seq",
+                    "clip_pooled",
+                    "clip_attention",
+                    "clip_crossattn",
+                    "clip_hybrid",
+                ):
                     raise ValueError(
                         "decoder 为 clip_* 时必须提供 cond，形状 [B, L, clip_text_dim]。"
                     )
@@ -170,23 +199,25 @@ class MambaDecoder(nn.Module):
             if self.cond_mode == "clip_crossattn":
                 cond_seq = self.cond_embedding(cond)  # [B, Lt, cond_embed_dim]
                 cond_emb = cond_seq.mean(dim=1)  # dummy global，供 AdaLN 形状兼容
+            elif self.cond_mode == "clip_hybrid":
+                cond_seq, cond_emb = self.cond_embedding(cond)  # seq + global
             else:
                 cond_emb = self.cond_embedding(cond)
 
         x = self.fc_in(z)
         x = x.view(-1, self.embed_dim, self.map_size, self.map_size)
         x = self.layer1(x, cond_emb)
-        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
             x = self._cross_attn_injectors[0](x, cond_seq, self.cross_attn_blocks[0])
         x = self.up1(x)
 
         x = self.layer2(x, cond_emb)
-        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
             x = self._cross_attn_injectors[1](x, cond_seq, self.cross_attn_blocks[1])
         x = self.up2(x)
 
         x = self.layer3(x, cond_emb)
-        if self.cond_mode == "clip_crossattn" and cond_seq is not None:
+        if self.cond_mode in ("clip_crossattn", "clip_hybrid") and cond_seq is not None:
             x = self._cross_attn_injectors[2](x, cond_seq, self.cross_attn_blocks[2])
         x = self.up3(x)
 

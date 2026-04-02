@@ -1,0 +1,26 @@
+# Phase 3.3（1.txt）：Dual-Injection + Zero-Init Gating
+#   - 全局：c_global -> AdaLN（稳定结构，保护 LPIPS/PSNR）
+#   - 细粒度：c_seq   -> gated Cross-Attention（提升 CLIP Score）
+
+experiment:
+  name: "exp_c_phase3_clip_hybrid_ss2d"
+  description: "Phase3.3: Dual-Injection (AdaLN global + gated CrossAttn token) + SS2D"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_hybrid"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+  attn_heads: 4
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+
