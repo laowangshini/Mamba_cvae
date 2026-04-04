@@ -1,0 +1,28 @@
+# Phase 4.1：超参微调 —— 拉升 LPIPS 权重 + 增强无条件流形
+# 基于 exp_d_phase4_clip_seq_lpips_cfg_ss2d.yaml，调整两个关键旋钮：
+#   lambda_lpips: 0.5 -> 2.0  (强迫网络重视感知质量)
+#   cond_dropout_prob: 0.1 -> 0.2  (稳固无条件基底，减少 CFG 截断伪影)
+
+experiment:
+  name: "exp_d_phase4_v2_lpips_cfg_refine"
+  description: "Phase4.1: lambda_lpips=2.0 + cond_dropout=0.2 (fix gradient drowning)"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+  kld_weight: 1.0
+  lambda_lpips: 2.0
+  cond_dropout_prob: 0.2

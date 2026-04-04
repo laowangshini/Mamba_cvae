@@ -1,0 +1,30 @@
+# Phase 5 Round 1: Ultimate Fusion Baseline
+# clip_hybrid (Dual: AdaLN global + Gated Cross-Attn sequence)
+# Gate warm-start 0.02, bottleneck_inject_stages=1 (4x4 only)
+# Loss: L1(mean) + LPIPS=1.0 + KLD=0.005 (Phase 4.2 R5 proven config)
+
+experiment:
+  name: "exp_e_phase5_r1_hybrid_ss2d"
+  description: "Phase5 R1: clip_hybrid + gate=0.02 + L1-mean + LPIPS=1.0"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_hybrid"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+  attn_heads: 4
+  bottleneck_inject_stages: 1
+
+train:
+  batch_size: 64
+  lr: 0.0002
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.005
+  lambda_lpips: 1.0
+  cond_dropout_prob: 0.15

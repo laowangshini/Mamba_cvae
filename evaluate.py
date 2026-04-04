@@ -201,7 +201,12 @@ def discover_latest_run_dirs(exp_root, prefixes):
     return chosen
 
 
-def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches=None):
+def evaluate_model(
+    exp_name_dir,
+    checkpoint_name="model_latest.pth",
+    max_batches=None,
+    cfg_scale: float = 1.0,
+):
     exp_path = os.path.join(PROJECT_ROOT, "experiments", exp_name_dir)
     config_path = os.path.join(exp_path, "run_config.yaml")
     weight_path = os.path.join(exp_path, checkpoint_name)
@@ -391,7 +396,19 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
                 images, cond = batch
                 images = images.to(DEVICE)
                 cond = cond.to(DEVICE)
-                recon_images, _, _ = model(images, cond)
+
+                # CFG (Phase 4：Modern CVAE)
+                # 对 clip_*：同时解码有条件与“空条件(全零条件)”两条分支，再按 cfg_scale 融合。
+                if cond_mode.startswith("clip_") and cfg_scale != 1.0:
+                    mu, logvar = model.encode(images)
+                    z = model.reparameterize(mu, logvar)  # eval 下为确定性 mu
+                    recon_cond = model.decode(z, cond)
+                    cond_null = torch.zeros_like(cond)
+                    recon_null = model.decode(z, cond_null)
+                    recon_images = recon_null + cfg_scale * (recon_cond - recon_null)
+                    recon_images = torch.clamp(recon_images, -1.0, 1.0)
+                else:
+                    recon_images, _, _ = model(images, cond)
             else:
                 images = batch.to(DEVICE)
                 recon_images, _, _ = model(images)
@@ -452,7 +469,14 @@ def evaluate_model(exp_name_dir, checkpoint_name="model_latest.pth", max_batches
         with torch.no_grad():
             for _ in range(nrep):
                 if dummy_cond is not None:
-                    _ = model(dummy, dummy_cond)
+                    if cond_mode.startswith("clip_") and cfg_scale != 1.0:
+                        mu, logvar = model.encode(dummy)
+                        z = model.reparameterize(mu, logvar)
+                        recon_cond = model.decode(z, dummy_cond)
+                        recon_null = model.decode(z, torch.zeros_like(dummy_cond))
+                        _ = recon_null + cfg_scale * (recon_cond - recon_null)
+                    else:
+                        _ = model(dummy, dummy_cond)
                 else:
                     _ = model(dummy)
         torch.cuda.synchronize()
@@ -508,6 +532,12 @@ def main():
         help="仅调试用：最多跑多少个 batch 后停止",
     )
     parser.add_argument(
+        "--cfg-scale",
+        type=float,
+        default=1.0,
+        help="CFG 外推系数 w（clip_* 模式下启用）：1.0 等同无 CFG，2.0/4.0 对应 Phase4 的消融。",
+    )
+    parser.add_argument(
         "--out-csv",
         type=str,
         default=None,
@@ -535,7 +565,12 @@ def main():
 
     all_rows = []
     for d in exp_dirs:
-        row = evaluate_model(d, checkpoint_name=args.checkpoint, max_batches=args.max_batches)
+        row = evaluate_model(
+            d,
+            checkpoint_name=args.checkpoint,
+            max_batches=args.max_batches,
+            cfg_scale=args.cfg_scale,
+        )
         if row is not None:
             all_rows.append(row)
 

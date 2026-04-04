@@ -1,0 +1,26 @@
+# Phase 4.2 Round 2: Rebalance — boost KLD for latent structure, lower LPIPS weight
+# R1 hit LPIPS=0.22 but CLIP fell to 25.0. Hypothesis: kld too low -> latent collapse -> weak conditioning
+
+experiment:
+  name: "exp_phase42_round2"
+  description: "Phase4.2 R2: kld=0.01, lpips=0.5 — restore latent structure for CLIP"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.01
+  lambda_lpips: 0.5
+  cond_dropout_prob: 0.2

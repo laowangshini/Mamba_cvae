@@ -1,0 +1,28 @@
+# Phase 4.2 Round 5: Final push — higher LPIPS + lower dropout to strengthen conditioning
+# R4: LPIPS=0.202 (best), CLIP=24.9 (stuck)
+# Hypothesis: cond_dropout=0.2 drops condition too often, weakening MambaSemanticMapper training
+# Also increase lambda_lpips=1.0 (full strength) to maintain perceptual quality
+
+experiment:
+  name: "exp_phase42_round5"
+  description: "Phase4.2 R5: lr=2e-4, lpips=1.0, kld=0.005, dropout=0.15 (strengthen cond)"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0002
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.005
+  lambda_lpips: 1.0
+  cond_dropout_prob: 0.15

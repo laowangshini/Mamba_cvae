@@ -1,0 +1,28 @@
+# Phase 4（1.txt）：Modern Mamba-CVAE
+# - 训练：LPIPS 感知损失 + 10% 条件置空（CFG dropout）
+# - 评估：CFG 外推（clip_* 分支使用 evaluate.py 的 --cfg-scale）
+
+experiment:
+  name: "exp_d_phase4_clip_seq_lpips_cfg_ss2d"
+  description: "Phase4: LPIPS perceptual loss + CFG-style cond dropout (base on clip_seq)"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+  kld_weight: 1.0
+  lambda_lpips: 0.5
+  cond_dropout_prob: 0.1
+

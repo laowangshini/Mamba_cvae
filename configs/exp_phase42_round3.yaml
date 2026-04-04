@@ -1,0 +1,28 @@
+# Phase 4.2 Round 3: Restore lambda_lpips=1.0 (R1 best), moderate KLD, higher cond_dropout
+# R1: LPIPS=0.220 CLIP=25.0 (lpips=1.0, kld=0.001)
+# R2: LPIPS=0.232 CLIP=24.9 (lpips=0.5, kld=0.01) — worse on both axes
+# R3: keep R1 lpips weight, slightly higher KLD, more CFG training
+
+experiment:
+  name: "exp_phase42_round3"
+  description: "Phase4.2 R3: lpips=1.0, kld=0.005, cond_dropout=0.25"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.005
+  lambda_lpips: 1.0
+  cond_dropout_prob: 0.25

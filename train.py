@@ -51,6 +51,9 @@ CLIP_CACHE_PT = _model.get('clip_cache_pt')
 MAPPER_BIDIRECTIONAL = bool(_model.get('mapper_bidirectional', True))
 ATTN_HEADS = int(_model.get('attn_heads', 4))
 BOTTLENECK_INJECT_STAGES = int(_model.get('bottleneck_inject_stages', 1))
+KLD_WEIGHT = float(cfg['train'].get('kld_weight', 1.0))
+LAMBDA_LPIPS = float(cfg['train'].get('lambda_lpips', 0.0))
+COND_DROPOUT_PROB = float(cfg['train'].get('cond_dropout_prob', 0.0))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -198,9 +201,9 @@ class CelebAImageDataset(Dataset):
 
 
 def loss_function(recon_x, x, mu, logvar, beta=1.0):
-    MSE = F.mse_loss(recon_x, x, reduction='sum')
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return MSE + beta * KLD
+    L1 = F.l1_loss(recon_x, x, reduction='mean')
+    KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    return L1 + beta * KLD
 
 
 def main():
@@ -215,6 +218,19 @@ def main():
     logger.info(f"Manifest: {os.path.join(EXP_DIR, 'manifest.json')} (本目录归属说明)")
     logger.info(f"Registry: {os.path.join(PROJECT_ROOT, 'experiments', 'experiment_registry.csv')} (全局索引)")
     logger.info("="*50)
+
+    loss_fn_vgg = None
+    if LAMBDA_LPIPS > 0:
+        try:
+            import lpips
+        except Exception as e:
+            raise ImportError(
+                "需要安装 lpips 才能启用 perceptual loss：pip install lpips"
+            ) from e
+        logger.info(f"[INFO] 启用 LPIPS Loss (lambda_lpips={LAMBDA_LPIPS})")
+        loss_fn_vgg = lpips.LPIPS(net="vgg").to(DEVICE).eval()
+        for p in loss_fn_vgg.parameters():
+            p.requires_grad = False
 
     transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -296,29 +312,50 @@ def main():
         model.train()
         total_loss = 0
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}")
-        last_cond = None
+        last_cond_vis = None
+        cond_dropped_rate = COND_DROPOUT_PROB if (COND_MODE.startswith("clip_") and COND_DROPOUT_PROB > 0) else 0.0
 
         for batch in pbar:
             if dataset.use_cond:
                 images, cond = batch
                 images = images.to(DEVICE)
                 cond = cond.to(DEVICE)
-                last_cond = cond
+                # 训练期 CFG dropout：以一定概率将条件置零，等价“空文本”训练
+                # 注意：last_cond_vis 保留为未置空版本，用于可视化重建
+                last_cond_vis = cond
+                if cond_dropped_rate > 0:
+                    b = cond.shape[0]
+                    drop = (torch.rand(b, device=cond.device) < cond_dropped_rate)
+                    keep = (~drop).float()
+                    if cond.dim() == 3:
+                        keep = keep[:, None, None]
+                    elif cond.dim() == 2:
+                        keep = keep[:, None]
+                    else:
+                        raise ValueError(f"Unexpected cond shape for dropout: {cond.shape}")
+                    cond = cond * keep
             else:
                 images = batch.to(DEVICE)
                 cond = None
 
             optimizer.zero_grad()
             recon_images, mu, logvar = model(images, cond)
-            loss = loss_function(recon_images, images, mu, logvar)
+            base_loss = loss_function(recon_images, images, mu, logvar, beta=KLD_WEIGHT)
+            loss = base_loss
+            if loss_fn_vgg is not None:
+                # recon_images / images: [-1,1] -> [0,1] for LPIPS
+                recons_01 = (recon_images * 0.5 + 0.5).clamp(0, 1)
+                imgs_01 = (images * 0.5 + 0.5).clamp(0, 1)
+                lpips_loss = loss_fn_vgg(recons_01, imgs_01).mean()
+                loss = base_loss + LAMBDA_LPIPS * lpips_loss
 
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
-            pbar.set_postfix({'loss': loss.item() / len(images)})
+            pbar.set_postfix({'loss': loss.item()})
 
-        avg_loss = total_loss / len(dataset)
+        avg_loss = total_loss / len(dataloader)
         logger.info(f"Epoch[{epoch+1}/{EPOCHS}] - Average Loss: {avg_loss:.4f}")
 
         torch.save(model.state_dict(), os.path.join(EXP_DIR, "model_latest.pth"))
@@ -326,7 +363,7 @@ def main():
         if (epoch + 1) % 5 == 0:
             torch.save(model.state_dict(), os.path.join(EXP_DIR, f"model_epoch_{epoch+1}.pth"))
             save_reconstruction(
-                model, images[:8], last_cond[:8] if last_cond is not None else None, epoch+1, EXP_DIR
+                model, images[:8], last_cond_vis[:8] if last_cond_vis is not None else None, epoch+1, EXP_DIR
             )
 
     logger.info("Training completed.")

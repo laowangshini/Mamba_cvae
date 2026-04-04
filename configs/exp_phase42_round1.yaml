@@ -1,0 +1,27 @@
+# Phase 4.2 Round 1: Full-Mean Loss Paradigm Baseline
+# L1(mean) + KLD(mean) + LPIPS(mean) — all components ~0.1-0.5 range
+# kld_weight=0.001 to prioritize reconstruction quality
+
+experiment:
+  name: "exp_phase42_round1"
+  description: "Phase4.2 R1: L1(mean)+LPIPS=1.0+KLD=0.001, cond_dropout=0.2"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0001
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.001
+  lambda_lpips: 1.0
+  cond_dropout_prob: 0.2

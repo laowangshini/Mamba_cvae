@@ -408,8 +408,8 @@ class GatedHybridCrossAttnBlock(nn.Module):
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
         )
-        # Phase 3.4：通道级零初始化门控（每个通道独立控制注入强度）
-        self.gate = nn.Parameter(torch.zeros(hidden_dim))
+        # Phase 5：通道级门控，warm-start 0.02 解决冷启动（零初始化时梯度过小导致 Cross-Attn 永远沉默）
+        self.gate = nn.Parameter(torch.full((hidden_dim,), 0.02))
 
     def forward(self, v_seq, t_seq):
         q = self.norm_q(v_seq)

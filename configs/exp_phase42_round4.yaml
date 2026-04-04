@@ -1,0 +1,27 @@
+# Phase 4.2 Round 4: Higher LR to push optimization, balanced L1/LPIPS
+# R1-R3 consistently hit LPIPS~0.22 but CLIP stuck at ~25.0
+# Hypothesis: model undertrained at lr=1e-4 for 20 ep; try 2e-4
+
+experiment:
+  name: "exp_phase42_round4"
+  description: "Phase4.2 R4: lr=2e-4, lpips=0.5, kld=0.01, cond_dropout=0.2"
+
+model:
+  block_type: "ss2d"
+  latent_dim: 128
+  cond_mode: "clip_seq"
+  cond_dim: 0
+  cond_embed_dim: 256
+  clip_text_dim: 512
+  clip_seq_len: 77
+  clip_cache_pt: "data/celeba/celeba_clip_text_vitb32.pt"
+  mapper_bidirectional: true
+
+train:
+  batch_size: 64
+  lr: 0.0002
+  epochs: 20
+  img_size: 64
+  kld_weight: 0.01
+  lambda_lpips: 0.5
+  cond_dropout_prob: 0.2
