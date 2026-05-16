@@ -54,6 +54,8 @@ BOTTLENECK_INJECT_STAGES = int(_model.get('bottleneck_inject_stages', 1))
 KLD_WEIGHT = float(cfg['train'].get('kld_weight', 1.0))
 LAMBDA_LPIPS = float(cfg['train'].get('lambda_lpips', 0.0))
 COND_DROPOUT_PROB = float(cfg['train'].get('cond_dropout_prob', 0.0))
+GATE_INIT = float(_model.get('gate_init', 0.02))
+GATE_GRAD_LOG = bool(cfg['train'].get('gate_grad_log', False))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -83,6 +85,8 @@ _manifest = {
     "mapper_bidirectional": MAPPER_BIDIRECTIONAL,
     "attn_heads": ATTN_HEADS,
     "bottleneck_inject_stages": BOTTLENECK_INJECT_STAGES,
+    "gate_init": GATE_INIT,
+    "gate_grad_log": GATE_GRAD_LOG,
     "description": cfg["experiment"].get("description", ""),
     "train": dict(cfg["train"]),
     "source_config": os.path.abspath(
@@ -304,10 +308,42 @@ def main():
         mapper_bidirectional=MAPPER_BIDIRECTIONAL,
         attn_heads=ATTN_HEADS,
         bottleneck_inject_stages=BOTTLENECK_INJECT_STAGES,
+        gate_init=GATE_INIT,
     ).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LR)
 
+    # 门控梯度日志：仅在 cond_mode=clip_hybrid 且开启 train.gate_grad_log 时启用
+    gate_log_path = None
+    gate_log_writer = None
+    gate_log_file_handle = None
+    gate_params = []
+    if GATE_GRAD_LOG and COND_MODE == "clip_hybrid":
+        try:
+            gate_params = [
+                blk.gate for blk in model.decoder.cross_attn_blocks
+            ]
+        except Exception as e:
+            logger.warning(f"无法获取门控参数用于梯度日志: {e}")
+            gate_params = []
+        if gate_params:
+            gate_log_path = os.path.join(EXP_DIR, "gate_grad_log.csv")
+            gate_log_file_handle = open(gate_log_path, "w", newline="", encoding="utf-8")
+            gate_log_writer = csv.writer(gate_log_file_handle)
+            header = ["global_step", "epoch", "step_in_epoch", "gate_init"]
+            for i in range(len(gate_params)):
+                header += [
+                    f"gate{i}_grad_l2",
+                    f"gate{i}_value_mean",
+                    f"gate{i}_value_l2",
+                ]
+            gate_log_writer.writerow(header)
+            gate_log_file_handle.flush()
+            logger.info(
+                f"启用门控梯度日志：{gate_log_path}（gate_init={GATE_INIT}）"
+            )
+
     logger.info("Start training...")
+    global_step = 0
     for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
@@ -315,7 +351,7 @@ def main():
         last_cond_vis = None
         cond_dropped_rate = COND_DROPOUT_PROB if (COND_MODE.startswith("clip_") and COND_DROPOUT_PROB > 0) else 0.0
 
-        for batch in pbar:
+        for step_in_epoch, batch in enumerate(pbar):
             if dataset.use_cond:
                 images, cond = batch
                 images = images.to(DEVICE)
@@ -350,10 +386,27 @@ def main():
                 loss = base_loss + LAMBDA_LPIPS * lpips_loss
 
             loss.backward()
+
+            if gate_log_writer is not None:
+                row = [global_step, epoch + 1, step_in_epoch, GATE_INIT]
+                for gp in gate_params:
+                    if gp.grad is None:
+                        row += [float("nan"), float(gp.detach().mean().item()), float(gp.detach().norm().item())]
+                    else:
+                        row += [
+                            float(gp.grad.detach().norm().item()),
+                            float(gp.detach().mean().item()),
+                            float(gp.detach().norm().item()),
+                        ]
+                gate_log_writer.writerow(row)
+                if (step_in_epoch + 1) % 20 == 0:
+                    gate_log_file_handle.flush()
+
             optimizer.step()
 
             total_loss += loss.item()
             pbar.set_postfix({'loss': loss.item()})
+            global_step += 1
 
         avg_loss = total_loss / len(dataloader)
         logger.info(f"Epoch[{epoch+1}/{EPOCHS}] - Average Loss: {avg_loss:.4f}")
@@ -365,6 +418,11 @@ def main():
             save_reconstruction(
                 model, images[:8], last_cond_vis[:8] if last_cond_vis is not None else None, epoch+1, EXP_DIR
             )
+
+    if gate_log_file_handle is not None:
+        gate_log_file_handle.flush()
+        gate_log_file_handle.close()
+        logger.info(f"门控梯度日志已写入：{gate_log_path}")
 
     logger.info("Training completed.")
 

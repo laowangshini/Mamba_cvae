@@ -397,23 +397,26 @@ class MambaSemanticMapper_Dual(nn.Module):
 
 class GatedHybridCrossAttnBlock(nn.Module):
     """
-    Phase 3.3：带零初始化 gate 的 Cross-Attention。
-    初始 gate=0，使模型训练初期等效于不注入 Cross-Attn，避免破坏视觉流形（保护 LPIPS）。
+    Phase 3.3 / Phase 5：通道级门控 Cross-Attention。
+
+    gate_init 控制门控的初始值：
+      - 0.0    : 严格的零初始化（与 LoRA / ControlNet 类似），训练初期 Cross-Attn 完全无贡献，
+                 用于复现「梯度惰性」消融对照组。
+      - 0.02   : 热启动 Warm-Start（论文方法），提供非零的梯度起点，避免 Cross-Attn 永久沉默。
     """
 
-    def __init__(self, hidden_dim, num_heads=4):
+    def __init__(self, hidden_dim, num_heads=4, gate_init: float = 0.02):
         super().__init__()
         self.norm_q = nn.LayerNorm(hidden_dim)
         self.norm_kv = nn.LayerNorm(hidden_dim)
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=hidden_dim, num_heads=num_heads, batch_first=True
         )
-        # Phase 5：通道级门控，warm-start 0.02 解决冷启动（零初始化时梯度过小导致 Cross-Attn 永远沉默）
-        self.gate = nn.Parameter(torch.full((hidden_dim,), 0.02))
+        self.gate_init = float(gate_init)
+        self.gate = nn.Parameter(torch.full((hidden_dim,), self.gate_init))
 
     def forward(self, v_seq, t_seq):
         q = self.norm_q(v_seq)
         kv = self.norm_kv(t_seq)
         attn_out, _ = self.cross_attn(q, kv, kv, need_weights=False)
-        # gate: [D]，通过广播作用到 [B, Lv, D]
         return v_seq + self.gate * attn_out

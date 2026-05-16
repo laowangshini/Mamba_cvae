@@ -22,6 +22,7 @@ class MambaCVAE(nn.Module):
         mapper_bidirectional=True,
         attn_heads=4,
         bottleneck_inject_stages=1,
+        gate_init: float = 0.02,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -41,6 +42,7 @@ class MambaCVAE(nn.Module):
             mapper_bidirectional=mapper_bidirectional,
             attn_heads=attn_heads,
             bottleneck_inject_stages=bottleneck_inject_stages,
+            gate_init=gate_init,
         )
 
     def reparameterize(self, mu, logvar):

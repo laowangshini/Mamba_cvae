@@ -61,6 +61,7 @@ class MambaDecoder(nn.Module):
         mapper_bidirectional=True,
         attn_heads=4,
         bottleneck_inject_stages=1,
+        gate_init: float = 0.02,
     ):
         super().__init__()
 
@@ -80,6 +81,7 @@ class MambaDecoder(nn.Module):
         self.cond_mode = cond_mode
         self.clip_text_dim = clip_text_dim
         self.bottleneck_inject_stages = int(bottleneck_inject_stages)
+        self.gate_init = float(gate_init)
 
         if cond_mode == "clip_seq":
             self.cond_embedding = MambaSemanticMapper(
@@ -136,10 +138,15 @@ class MambaDecoder(nn.Module):
                 bidirectional=mapper_bidirectional,
             )
             ced = cond_embed_dim
-            # Phase 3.4：只在瓶颈层（最低分辨率 stage）做 Cross-Attn，并使用通道级 gate
+            # Phase 3.4 / Phase 5：只在瓶颈层做 Cross-Attn，并使用通道级 gate
+            # gate_init=0.02 为「Warm-Start」（论文默认），gate_init=0.0 为「零初始化」消融对照
             self.cross_attn_blocks = nn.ModuleList(
                 [
-                    GatedHybridCrossAttnBlock(cond_embed_dim, num_heads=attn_heads)
+                    GatedHybridCrossAttnBlock(
+                        cond_embed_dim,
+                        num_heads=attn_heads,
+                        gate_init=self.gate_init,
+                    )
                     for _ in range(3)
                 ]
             )
